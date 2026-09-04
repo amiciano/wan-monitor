@@ -120,31 +120,120 @@ void checkWan()
     Serial.println();
     Serial.println("Checking WAN link...");
 
-    HTTPClient http;
+    // get XSRF token
+    HTTPClient loginHttp;
 
-    http.begin(ROUTER_STATS_URL);
+    loginHttp.begin(ROUTER_URL);
 
-    // Same HTTP Basic Authentication as curl -u
-    http.setAuthorization(
+    const char* headerKeys[] = {"Set-Cookie"};
+    loginHttp.collectHeaders(headerKeys, 1);
+
+    int loginCode = loginHttp.GET();
+
+    Serial.print("Initial router response: ");
+    Serial.println(loginCode);
+
+    String setCookie = loginHttp.header("Set-Cookie");
+
+    loginHttp.end();
+
+    if (setCookie.length() == 0)
+    {
+        Serial.println("No Set-Cookie header received.");
+        return;
+    }
+
+    Serial.print("Set-Cookie: ");
+    Serial.println(setCookie);
+
+    // Extract XSRF_TOKEN value
+    int tokenStart = setCookie.indexOf("XSRF_TOKEN=");
+
+    if (tokenStart == -1)
+    {
+        Serial.println("XSRF_TOKEN not found.");
+        return;
+    }
+
+    tokenStart += String("XSRF_TOKEN=").length();
+
+    int tokenEnd = setCookie.indexOf(';', tokenStart);
+
+    if (tokenEnd == -1)
+    {
+        tokenEnd = setCookie.length();
+    }
+
+    String xsrfToken =
+        setCookie.substring(tokenStart, tokenEnd);
+
+    Serial.print("XSRF token: ");
+    Serial.println(xsrfToken);
+
+    // Authenticate router session
+
+    HTTPClient authHttp;
+
+    authHttp.begin(ROUTER_URL);
+
+    authHttp.setAuthorization(
         ROUTER_USERNAME,
         ROUTER_PASSWORD
     );
 
-    int responseCode = http.GET();
+    authHttp.addHeader(
+        "Cookie",
+        "XSRF_TOKEN=" + xsrfToken
+    );
 
-    Serial.print("Router HTTP response: ");
+    int authCode = authHttp.GET();
+
+    Serial.print("Authenticated router response: ");
+    Serial.println(authCode);
+
+    if (authCode != 200)
+    {
+        Serial.println("Router authentication failed.");
+        authHttp.end();
+        return;
+    }
+
+    authHttp.end();
+
+    // Request statistics page
+
+    HTTPClient statsHttp;
+
+    statsHttp.begin(ROUTER_STATS_URL);
+
+    // Same HTTP Basic Authentication as curl -u
+    statsHttp.setAuthorization(
+        ROUTER_USERNAME,
+        ROUTER_PASSWORD
+    );
+
+    statsHttp.addHeader(
+        "Cookie",
+        "XSRF_TOKEN=" + xsrfToken
+    );
+
+    int responseCode = statsHttp.GET();
+
+    Serial.print("Stats HTTP response: ");
     Serial.println(responseCode);
 
     if (responseCode != 200)
     {
         Serial.println("Failed to retrieve router statistics.");
-        http.end();
+        statsHttp.end();
         return;
     }
 
-    String html = http.getString();
+    String html = statsHttp.getString();
 
-    http.end();
+    statsHttp.end();
+
+    // Parse WAN speed
 
     WanSpeed currentSpeed = getWanSpeed(html);
 
